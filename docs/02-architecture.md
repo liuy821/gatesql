@@ -46,7 +46,7 @@ GateSQL 是一个**纯 Next.js 全栈单体**，单容器、双 SQLite 文件。
                                        └──────────────┘
 ```
 
-★ 标记的两个文件**必须由作者本人手写**，见 [CLAUDE.md](../CLAUDE.md)。
+★ 标记的两个文件是全项目的两处核心实现（agent 主循环与安全检查），设计见 [Agent 设计](05-agent-design.md) 与 [安全设计](07-security.md)。
 
 ## 二、为什么这样分层
 
@@ -120,7 +120,7 @@ Next.js 全栈最容易犯的错是「什么都塞进 Server Action」或「什�
 
 | 层 | 选择 | 理由 |
 |---|---|---|
-| 框架 | Next.js 16（App Router） | 作者指定全栈单框架；RSC + Route Handler 覆盖全部需求 |
+| 框架 | Next.js 16（App Router） | 全栈单框架；RSC + Route Handler 覆盖全部需求 |
 | 语言 | TypeScript 严格模式 | 端到端类型安全，SSE 事件协议靠类型系统守住 |
 | 样式 | Tailwind + shadcn/ui | 组件源码复制进项目，可控；默认外观即可，UI 设硬时间盒 |
 | 图表 | ECharts（`echarts/core` 按需引入 + `dynamic(..., {ssr:false})`） | 中文文档全；按需引入控制包体积 |
@@ -145,7 +145,6 @@ Next.js 全栈最容易犯的错是「什么都塞进 Server Action」或「什�
 
 ```
 text2sql-agent/
-├── CLAUDE.md                    项目约定（AI 每次自动读）
 ├── README.md
 ├── docker-compose.yml           第 6 周
 ├── Dockerfile                   多阶段，output:'standalone'
@@ -153,7 +152,7 @@ text2sql-agent/
 │
 ├── docs/                        本文档集
 │   ├── 00-product.md ~ 10-engineering.md
-│   ├── adr/NNN-*.md             架构决策记录（作者本人写）
+│   ├── 09-decisions.md          架构决策记录（23 篇 ADR）
 │   ├── eval-log.md              每轮优化的 before/after
 │   └── evalset/questions.md     30 题题面（第 1 周冻结并打 tag）
 │
@@ -190,7 +189,7 @@ text2sql-agent/
 │   │   ├── events.ts            ★ SSE 事件协议（Zod discriminated union，唯一契约）
 │   │   ├── reduce-events.ts     ★ 纯函数，前后端共用
 │   │   ├── agent/
-│   │   │   ├── loop.ts          ★★ 主循环（作者手写）
+│   │   │   ├── loop.ts          ★★ agent 主循环
 │   │   │   ├── prompts.ts       提示词
 │   │   │   ├── llm.ts           模型调用 + cassette 拦截
 │   │   │   ├── schema-context.ts 确定性裁剪 + 枚举值注入
@@ -199,7 +198,7 @@ text2sql-agent/
 │   │   │   ├── budget.ts        多维预算
 │   │   │   └── fingerprint.ts   AST 规范化指纹（环路检测）
 │   │   ├── sql/
-│   │   │   ├── guard.ts         ★★ 安全检查（作者手写，fail-closed）
+│   │   │   ├── guard.ts         ★★ SQL 安全检查（fail-closed）
 │   │   │   ├── lint.ts          口径规则引擎（fail-open）
 │   │   │   ├── rules.ts         8 条口径规则的数据结构声明
 │   │   │   ├── explain.ts       EQP 代价预检
@@ -222,7 +221,7 @@ text2sql-agent/
     └── reduce-events.test.ts
 ```
 
-★ = 关键契约文件，★★ = **必须作者手写**。
+★ = 关键契约文件，★★ = 核心实现。
 
 ## 六、架构上的三条硬约束
 

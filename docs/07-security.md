@@ -1,6 +1,6 @@
 # 安全设计
 
-> **`src/lib/sql/guard.ts` 必须由作者本人手写。** 本文档给设计和攻击清单，不给成品代码。
+> guard 的实现在 `src/lib/sql/guard.ts`，每条判定都注释了实测依据；本文档记录设计、九层职责与攻击清单。
 
 「怎么防止 agent 删库」是这个项目 **100% 会被问到**的题。绝大多数候选人的答案是「我做了关键字黑名单」—— 这个答案在面试官眼里等于没做，因为它挡不住注释拆词、大小写混写、全角字符、以及藏在 CTE 里的写操作。
 
@@ -45,9 +45,19 @@
 |---|---|
 | `READ` (20) / `SELECT` (21) / `FUNCTION` (31) | `INSERT` / `UPDATE` / `DELETE` / `DROP` / `ALTER` / `ATTACH` / `DETACH` / `PRAGMA` / `CREATE` |
 
-> **为什么这是核心**：因为回调拿到的是 SQLite **自己解析后的语义**，所以 `/**/` 注释拆词、大小写混写、全角字符、藏在 CTE 里的写操作**一概失效**。这是文本匹配永远做不到的。
+> **为什么这是核心**：因为回调拿到的是 SQLite **自己解析后的语义**，所以 `/**/` 注释拆词、大小写混写、全角字符**一概失效** —— 这是文本匹配永远做不到的。写动作同理：`DELETE` 无论怎么写，到引擎这里都是动作码 9。
+>
+> （一处需要精确化：`WITH x AS (DELETE FROM orders RETURNING 1) SELECT * FROM x` 在本项目的 SQLite 版本上**语法本身不合法**，prepare 直接报 `near "DELETE": syntax error`，根本到不了 authorizer。该用例被拦住是「第 4 层 AST 解析失败 + 引擎语法层」双重兜住的结果 —— 保留它是为了防 SQLite 版本行为变化，但不该说成第 2 层的独功。）
 
-> **实测边界（Node v24 + node:sqlite）**：READ 动作上报的是 `(列名, schema 名)` 而不是表名（`SELECT id FROM orders` → `[20,"id","main"]`），`sqlite_master` 这类内部虚拟表同样不携带表名 —— 所以「在引擎层按表名挡掉 sqlite_master / _column_comments」在 node:sqlite 上**无法实现**。该职责由语句层 AST 表名收集（第 4 层）承担。**这是分层分工而非缺口**：引擎层按动作码挡写/结构/外挂，语句层挡内部表读取，各有各擅长的攻击面。
+> **实测边界（9/22 重做探针，Node v24.20 + node:sqlite）**：回调签名是 `(action, arg3, arg4, arg5, arg6)`，`SQLITE_READ(20)` 下 **arg3 = 表名、arg4 = 列名、arg5 = 库名**（`SELECT o.channel FROM orders o` → `action=20, arg3="orders", arg4="channel", arg5="main"`）。
+>
+> ⚠️ **本节此前写的是错的** —— 原话是「READ 动作上报的是 (列名, schema 名) 而不是表名，所以引擎层按表名过滤内部表无法实现」。错因：代码把形参命名成 `(action, _catalog, _table, _column, _arg)`，位置与 C API 不符，于是把「column 位置上有值」误读成「拿不到表名」；下划线前缀让 TypeScript 不报未使用，错误结论就这么固化进了注释和文档 —— 注意本节开头那句「拿到 (action code, 表名, 列名) 三元组」其实是对的，两处自相矛盾持续了很久。
+>
+> **实测证明引擎层做得到**：在 authorizer 里判 `arg3.startsWith("sqlite_")` 并返回 DENY，`SELECT name FROM sqlite_master` 会在 prepare 阶段被拒（`access to sqlite_master.name is prohibited`）。
+>
+> 那为什么内部表过滤仍然放在第 4 层？**这是取舍，不是能力限制**：① 引擎层应保持「不懂业务知识」，把 `_column_comments` 这类应用约定写进 authorizer，会让第 2 层开始携带第 4 层的语义；② AST 递归收集表名能覆盖子查询内的引用，表达力更完整；③ 两道都挡是好事 —— 第 4 层是提交前第一道，authorizer 是编译期最后一道。
+>
+> **本层真正的教训**：参数名说谎比没有注释更糟 —— 它能让一个错误结论看起来像实证结论。核实任何「能力边界」类结论时，要跑探针看**原始返回值**，不要相信形参名。
 
 **注意它的边界**：只在 prepare 阶段触发，它是**编译期闸门**，不能当超时或行数限制用。
 
@@ -73,7 +83,7 @@ prepare('SELECT 1 AS a; DROP TABLE orders').all()
 
 它的价值不在于比第 2 层更强（它更弱），而在于：能给用户一个**人类可读的拒绝理由**，并且产出供环路检测与结果缓存共用的规范化指纹。
 
-**这一层由作者手写**，配 ≥30 条攻击语料测试。
+这一层的实现配 ≥30 条攻击语料测试。
 
 ## 第 5 层 · 强制注入 LIMIT + 行数字节上限
 
@@ -151,7 +161,7 @@ EQP 约 1ms 且输出可判定：
 
 ## 三、自测攻击清单
 
-`tests/security/` 下至少 30 条 Vitest 用例。**作者手写完 guard 之后要自己攻击一遍，每条绕过尝试都留在仓库里 —— 这个文件本身就是面试材料。**
+`tests/security/` 下至少 30 条 Vitest 用例。**实现完成后对照清单逐条自测，每条绕过尝试都留在仓库里 —— 这份测试文件本身就是攻击面记录。**
 
 | # | 攻击手法 | 样例 |
 |---|---|---|

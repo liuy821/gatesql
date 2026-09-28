@@ -62,7 +62,7 @@ logs/
 .vscode/
 .idea/
 
-# AI agent 排查时留下的临时探查脚本
+# 排查问题时留下的临时探查脚本
 scripts/_tmp_*
 
 # 错题 trace 导出（scripts/dump-wrong-traces.ts 的输出，用完即弃）
@@ -70,3 +70,7 @@ trace-dump.txt
 
 # CI 门禁生成的评测对比表（每次运行覆盖，不入库）
 eval/ci-report.md
+
+# 个人开发配置与资料，不入库
+CLAUDE.md
+刘远简历.pdf

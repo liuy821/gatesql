@@ -1,7 +1,7 @@
 # 开发路线图
 
 每个任务都有**可手动判定的完成标准**。标准没达到就不要往下走。
-做完一项把 `[ ]` 改成 `[x]` —— 你能看到进度，AI 也能知道现在做到哪了。
+做完一项把 `[ ]` 改成 `[x]` —— 进度一眼可见。
 
 > **编号说明**：9/22 起主循环流程重排为三段 `A1`~`C4`（见 [05-agent-design 第一节](05-agent-design.md#一主循环三段-4-6-4只有-2-步调-llm)）。本文件里已勾选的历史条目保留当时写法（多数写着「步骤 N」），[旧→新对照表见 05 第一节末](05-agent-design.md#旧编号对照922-之前的文档roadmapadr-里的编号按此映射)；未开始的条目一律用新编号。
 
@@ -15,7 +15,7 @@
 
 ### 0.1 生成 Next.js 项目骨架 ✅ 已完成（2026-09-12）
 
-**注意：`create-next-app` 拒绝在非空目录生成项目**（`CLAUDE.md`、`data/`、`scripts/` 等都不在它的白名单里，会直接报「contains files that could conflict」退出）。所以正确顺序是：把现有文件挪出去 → 生成 → 挪回来：
+**注意：`create-next-app` 拒绝在非空目录生成项目**（`data/`、`scripts/` 等已有文件都不在它的白名单里，会直接报「contains files that could conflict」退出）。所以正确顺序是：把现有文件挪出去 → 生成 → 挪回来：
 
 ```bash
 # 1. 暂存现有文件（.git 留在原地）
@@ -25,10 +25,10 @@ Get-ChildItem -Force | Where-Object { $_.Name -ne ".git" } | Move-Item -Destinat
 # 2. 生成脚手架（--yes 跳过全部交互提问）
 pnpm create next-app@latest . --typescript --tailwind --eslint --app --src-dir --import-alias "@/*" --use-pnpm --yes
 
-# 3. 挪回来，手工合并三个撞名文件：.gitignore（合并两边）、CLAUDE.md / README.md（保留自己的）
+# 3. 挪回来，手工合并两个撞名文件：.gitignore（合并两边）、README.md（保留自己的）
 ```
 
-生成的是 **Next.js 16**（Turbopack 已是 dev/build 默认，无需任何标记）。脚手架还会生成 `AGENTS.md`（Next 16 的版本警告，要求写代码前查 `node_modules/next/dist/docs/`）—— 保留它，项目的 `CLAUDE.md` 末尾用 `@AGENTS.md` 引用了它。
+生成的是 **Next.js 16**（Turbopack 已是 dev/build 默认，无需任何标记）。脚手架还会生成 `AGENTS.md`（Next 16 的版本警告，要求写代码前查 `node_modules/next/dist/docs/`）—— 保留它。
 
 - [x] **完成标准**：`package.json`、`src/app/page.tsx` 等关键文件存在，`pnpm build` 通过
 
@@ -127,7 +127,7 @@ git add -A; git -c core.autocrlf=false commit -m "第0阶段：脚手架与依�
 - [x] `src/lib/sql/guard.ts`（2B；`7cdd811`/`482a22b` 记录 node-sql-parser 类型签名坑）
   - **完成标准**：37 条语料全过；当前 189 行
 - [x] `src/lib/agent/loop.ts`（2G，`8626920`；**行数标准的诚实修订**：≤350 行是第 2 周（约 250 行）时定的早期目标，此后自检审计、few-shot、2.6 提前拒答、5.5 列名核对、量级校验、结果体检、报表固化等功能合法增长，机械塞回 350 会牺牲「穷举状态机从上读到尾」这一本文件的核心价值。9/21 已做**行为不变重构**（`152c96b`）：prompt 构建（prompt.ts）与结果体检（health.ts）抽为可单测纯函数，717→621 行，评测 --ci 全命中零 miss 佐证无漂移。剩余 621 行主体是重试循环的检查链，刻意保留内联——**结论：把「≤350」从硬指标降级为「每个函数职责单一可讲解」**）
-  - **完成标准**：状态机/双预算/指纹防死循环在位；作者须能逐行讲解（复盘文档已梳理骨架）
+  - **完成标准**：状态机/双预算/指纹防死循环在位；主循环须能逐行讲解（源码注释与文档章节一一对应）
 - [x] EQP 预检（2D，`a15f20b`）
   - **完成标准**：缺失 JOIN 三表查询被拒；`SELECT * FROM products` 小表全扫放行
 - [x] `app.db` 表（2F，`fc3dd48`）
@@ -194,7 +194,7 @@ git add -A; git -c core.autocrlf=false commit -m "第0阶段：脚手架与依�
   - **完成标准**：30 题评测集上规则误报率 <5%，超标的已降级或删除（5F：eval 报告新增误报率行 —— 样本 = 50 条「结果正确」SQL（25 gold + 25 答对最终 SQL）全量过 lint，**全部 block 规则 0 误报**）
 - [x] SQL 人工编辑重跑 + 纠正样本回流 + 报表固化（5G：问答页「存为报表」仅固化 SQL；/reports 列表 + /reports/[id] 直接执行（guard 复检 + 只读连接 + 每次记 run/execute step，llm_call 恒 0）；runs 详情页人工改 SQL → guard 校验 + 只读重跑 → corrections（verified_by_user=1，表名自动识别）供 few-shot 检索。实测重跑 54ms/结果 41,015,358.75/trace 仅 1 个 execute 步骤；纠正样本 corr_07f3e462 入库 verified）
   - **完成标准**：点报表名重跑时 trace 里 `llm_call` 步骤数为 **0**、响应 <500ms
-- [x] 招牌演示脚本 + 第 5 周评测轮入档（5H：docs/demo-script.md 五镜头 60-90 秒脚本，待作者录制；最终评测 eval_20260916045915 = 30/30、误报率 0%、零回归）
+- [x] 招牌演示脚本 + 第 5 周评测轮入档（5H：docs/demo-script.md 五镜头 60-90 秒脚本（已录制，见 README 顶部视频）；最终评测 eval_20260916045915 = 30/30、误报率 0%、零回归）
 - [x] 步骤 8(d) 量级校验（docs/05 步骤 8 的最后一笔欠账，9/19 清偿：magnitude.ts 金额聚合结果对比「剥业务过滤、**保留时间范围**」的控制总数——时间口径是问题的一部分，连时间也剥掉会让「问某一天」必然误报 <1%；占比 >100%（逻辑不可能）或 <1%（过滤后所剩无几）→ fail 走 warnSeen 降级；只对单一 SUM 无 GROUP BY 表态，AVG/分组/NULL 一律 skip 不越界空集体检；控制查询逻辑导出为 buildControlQuery 供回执「排除金额合计」复用（单一事实源）。6 用例 + 实测「8月5日已完成销售额」占比 54% 正常通过、量级不误报）
 
 **第 5 周收官**：5A-5H 全部完成 + 步骤 8(d) 清偿 + 9/19 修复批（回执 fullyTranslated 语义、时间归一吞日、pnpm allowBuilds 占位符、.gitattributes 补账）。累计曲线：76.7%（原口径）→ 93.3%（校准）→ 96.7%（输出契约）→ **100%（澄清机制）**。下一站第 6 周：Docker（本体已过，验收待做）/ CI 门禁 / live-replay 对齐 / 成本护栏 / CSV / README。
@@ -233,7 +233,7 @@ git add -A; git -c core.autocrlf=false commit -m "第0阶段：脚手架与依�
 - [x] A4 提前拒答闸门 · 时间窗越水位 [旧编号 步骤 2.6]（9/21：isBeyondWatermark 纯函数 + loop 挂载；问未来时段从「1 次 LLM + 空集归因」升级为「0 次调用 + 精确理由」；E5/2027 实测 llmCalls=0，部分重叠窗口（B4）不受影响照常 verified；评测 --ci 无回归。发现并修复循环条件缺陷：`while (!ambiguity)` 未检查 verdict，2.6 命中仍进循环——改为 `while (!ambiguity && verdict === null)`）
 - [x] B4 列名静态核对 [旧编号 步骤 5.5]（9/21：schema-check.ts——带真实表前缀的列引用对照 PRAGMA 实际列清单，错列在执行前拦下并回喂「该表可用列」清单，比数据库报错更精确；**零误报纪律**：无前缀列/CTE 别名/表达式结果一律跳过，解析失败 fail-open，读不到 schema 整体静默；耗 repairs 预算同 EQP；trace 新增 column_check step。8 单测；评测 --ci 30 题 cassette 全过零误伤）
 - [x] B1 后 指纹语义归一 [旧称 步骤 指纹]（9/21：fingerprint.ts——补文本指纹防不住的震荡，只认两条可证明安全的等价：①AND/OR 操作数排序（交换律）②列引用别名归约为真实表名；明确不碰 JOIN 顺序/`x<=5`↔`x<6`/子查询改写（带前提或结构差异大，误杀代价 > 漏抓）。**过度合并护栏是生命线**：AND 叶子按整条序列化排序，仅换值（a=1 AND b=2 vs a=2 AND b=1）判不同；解析失败退回 txt: 前缀保持向后兼容。loop 仅改指纹函数体一行（锁死文件最小接触面）；7 单测含换序/别名互换撞指纹、换值/加条件不合并；评测无回归）
-- [ ] `docs/adr/` 下每个关键决策一篇**作者本人写**的 ADR，每篇必须有「代价」一节
+- [ ] ADR 内化：23 篇汇总在 [09-decisions](09-decisions.md)（每篇含「代价」），逐篇能用自己的话讲清
 - [ ] 面试叙述稿，口头演练 [Agent 设计](05-agent-design.md#七面试官很可能会问的五个问题) 的五个必问题
 - [ ] 再跑一轮定向优化；若已无提升空间，写一段「剩余错题分布在哪四类、每类为什么难、下一步会怎么做」
 - [x] `docs/backlog.md` 写清「明确不做」清单及各自的「如果要做会怎么做」（9/21：与 requirements.md 的「为什么不做」分工——本文补「如果做怎么做 + 触发条件 + 成本档」；分三类：地基已就位随时可启动（token 计价/结果缓存/回执扩展/夜间重录）、更大方向押后（多轮会话/语义层/多数据源/智能洞察/向量检索，各带不摧毁评测的做法）、永久绕开的证伪选型。README 文档索引已挂）
