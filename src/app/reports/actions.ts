@@ -54,11 +54,11 @@ export async function saveReportFromRun(runId: string): Promise<ActionResult> {
 export async function saveCorrectionFromEdit(runId: string, editedSql: string): Promise<ActionResult> {
   const sql = editedSql.trim().replace(/;+\s*$/, "");
   if (sql.length === 0) return { ok: false, message: "SQL 为空" };
-  const guard = guardSql(sql);
+  const env = (await import("@/lib/env")).getConfig();
+  const guard = guardSql(sql, env.MAX_ROWS);
   if (!guard.ok) return { ok: false, message: `安全检查未通过：${guard.detail ?? guard.reason}` };
 
   // 只读重跑：确认改后的 SQL 真能执行（错误 SQL 不允许进 corrections）
-  const env = (await import("@/lib/env")).getConfig();
   let rowCount = 0;
   try {
     const shop = new DatabaseSync(env.SHOP_DB_PATH, { readOnly: true });

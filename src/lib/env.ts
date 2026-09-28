@@ -5,6 +5,8 @@
 
 import { z } from "zod";
 
+import { DEFAULT_MAX_ROWS } from "@/lib/sql/guard";
+
 const EnvSchema = z.object({
   LLM_BASE_URL: z.string().url().default("https://ark.cn-beijing.volces.com/api/coding/v3"),
   LLM_API_KEY: z.string().optional(),
@@ -17,9 +19,11 @@ const EnvSchema = z.object({
   APP_DB_PATH: z.string().default("data/app.db"),
   /** 覆盖默认时钟（默认 = shop.db 的 max(orders.created_at)） */
   AS_OF_DATE: z.string().date().optional(),
-  /** 单条查询超时 / 返回行数上限（与 guard 的 MAX_ROWS 语义一致） */
+  /** 单条查询超时 */
   QUERY_TIMEOUT_MS: z.coerce.number().int().positive().default(5000),
-  MAX_ROWS: z.coerce.number().int().positive().default(1000),
+  /** 行数上限。默认值 import 自 guard 的 DEFAULT_MAX_ROWS —— 一处真相，
+   *  否则改了这里而 guard 仍按旧值收紧 LIMIT，C1 的截断检测会静默失效 */
+  MAX_ROWS: z.coerce.number().int().positive().default(DEFAULT_MAX_ROWS),
   /** 上下文工程 A/B 开关（docs/08 第 4 周）：off 时 schema 卡片不注入低基数列枚举值 */
   ENUM_INJECTION: z.enum(["on", "off"]).default("on"),
   /** 上下文工程 A/B 开关（docs/08 第 4 周）：off 时生成提示词不注入 R1-R8 口径规则文本 */

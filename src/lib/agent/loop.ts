@@ -360,7 +360,7 @@ export async function runAgent(deps: RunAgentDeps): Promise<RunSummary> {
       seenFingerprints.add(fp);
 
       // —— B2：安全（fail-closed；安全拒绝不重试，直接终止）——
-      const guard = guardSql(sql);
+      const guard = guardSql(sql, env.MAX_ROWS);
       if (!guard.ok) {
         finalStatus = "UNSAFE_SQL";
         trace({ kind: "guard", seq: attempt, startedAt: t0, endedAt: Date.now(), status: "failed", attributes: { detail: guard.detail ?? guard.reason } });

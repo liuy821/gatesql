@@ -63,7 +63,9 @@ export default async function ReportRerunPage({ params }: { params: Promise<{ id
     );
   }
 
-  const guard = guardSql(report.sql);
+  // LIMIT 上限与 C1 的截断检测同源（都取 env.MAX_ROWS），否则收紧到的行数
+  // 和判定「是否被截断」用的阈值会对不上，静默截断就报不出来
+  const guard = guardSql(report.sql, getConfig().MAX_ROWS);
   if (!guard.ok) {
     return (
       <main className="mx-auto min-h-dvh max-w-3xl px-4 py-8">

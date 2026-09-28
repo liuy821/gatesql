@@ -15,6 +15,11 @@
  *   - CTE 藏写操作 / PRAGMA / ATTACH 在 v5 直接解析失败 —— 被 AST_PARSE_FAILED 兜住
  *   - EXPLAIN 能解析成功，type='explain' —— 需要按 type 白名单拦
  *   - 指定 databaseType:'sqlite'；sqlify 重建会给标识符加反引号（SQLite 合法）
+ *
+ * ⚠️ 注释可信度声明：本文件 9/22 之前关于「authorizer 拿不到表名」的说法是**错的**
+ * （形参名按直觉猜的，与 SQLite C API 实际位置不符，导致误判能力边界），
+ * 已用探针推翻并改正 —— 见下方第 1+2 层的实测记录。
+ * 教训：**参数名说谎比没有注释更糟**，它会让一个错误的结论看起来像实证。
  */
 
 import { DatabaseSync } from "node:sqlite";
@@ -35,8 +40,10 @@ export type GuardReason =
   | "PATTERN_SEMICOLON"
   | "NOT_SELECT_OR_WITH"
   | "AST_PARSE_FAILED"
-  | "DANGEROUS_NODE"
-  | "AUTHORIZER_REJECTED";
+  | "DANGEROUS_NODE";
+// 注：原有一个 AUTHORIZER_REJECTED 值，但没有任何代码路径会返回它
+// （引擎层拒绝写操作是以抛错形式出现，走 B6 的 SQL_FAILED），已删除。
+// 保留永不发生的枚举值，会让后来读代码的人去找一条不存在的路径。
 
 export type GuardVerdict =
   | { ok: true; sql: string }
@@ -53,12 +60,29 @@ export type GuardVerdict =
  * 注意与广大博客常见误述相反：0 才是允许。测试不校验返回值，只校验行为，
  * 写错这个会导致「全部放行」或「全部拒绝」，从测试红字可立刻看出。
  *
- * 实测（scripts/probe 系列，Node v24 + node:sqlite）：
- *   READ 动作上报的是 (列名, schema名)，例如 SELECT id FROM orders →
- *   [20, "id", "main"]；sqlite_master 这类内部虚拟表同样不携带表名。
- *   因此「引擎层按表名过滤内部表」在 node:sqlite 上无法实现，
- *   内部表读过滤必须由 guardSql 的语句层表名收集（⑤）承担。
- *   这是分层防护而非缺口：引擎层按动作码挡写/结构/外挂，语句层挡内部表读。
+ * 实测（9/22 重做，Node v24.20 + node:sqlite，逐条对照回调实参）：
+ *   C 签名是 (action, arg3, arg4, arg5, arg6)，各动作码下含义不同 ——
+ *   SQLITE_READ(20)：arg3 = 表名，arg4 = 列名，arg5 = 库名。真实序列示例：
+ *     SELECT o.channel, SUM(oi.amount) FROM orders o JOIN order_items oi …
+ *       → action=21 (SELECT)  arg3=null
+ *       → action=20 (READ)    arg3="orders"       arg4="channel"  arg5="main"
+ *       → action=31 (FUNCTION) arg4="sum"
+ *       → action=20 (READ)    arg3="order_items"  arg4="amount"   arg5="main" …
+ *   写/结构类动作码同样上报：DELETE=9、PRAGMA=19、DROP_TABLE=3、ATTACH=22。
+ *
+ * ⚠️ 本文件与 docs/07 此处原写着「READ 不上报表名、引擎层无法按表名过滤内部表」，
+ *    **是错的**：错因是形参被命名为 (action, _catalog, _table, _column, _arg)，
+ *    与 C API 的实际位置不符（arg3 才是表名），于是把「column 位置上有值」
+ *    误读成「只有列名没有表名」；下划线前缀使 TS 不报未使用，错误结论得以固化。
+ *    实测证明：在 authorizer 里判 arg3.startsWith("sqlite_") 并 DENY，
+ *    `SELECT name FROM sqlite_master` 会在 prepare 阶段被拒
+ *    （报 "access to sqlite_master.name is prohibited"）—— 引擎层做得到。
+ *
+ * 那为什么表名过滤仍然放在语句层 guardSql 的 ⑤？**这是取舍不是能力限制**：
+ *   1. 引擎层应保持「不懂业务知识」—— 它只按动作码判断；
+ *      _column_comments 这类应用约定写进 authorizer 会让第 2 层开始携带第 4 层的语义
+ *   2. AST 层能覆盖子查询内的引用（递归收集表名），表达力更完整
+ *   3. 两处都挡是好事：⑤ 是提交前第一道，authorizer 是编译期最后一道
  */
 
 const SQLITE_OK = 0;
@@ -110,9 +134,10 @@ function collectTableNames(root: unknown): Set<string> {
 export function openReadOnlyConnection(dbPath: string): DatabaseSync {
   const db = new DatabaseSync(dbPath, { readOnly: true });
 
-  db.setAuthorizer((action, _catalog, _table, _column, _arg) => {
-    // 引擎层的职责边界（见文件头注释）：只按动作码拒绝，
-    // 不尝试表名过滤 —— node:sqlite 的 READ 不携带表名，实测确认。
+  // 形参按 C API 的位置命名（SQLITE_READ 下依次是 表名/列名/库名/触发器名）。
+  // 下划线前缀 = 本层刻意不看它们：引擎层只按动作码判断，业务知识留在第 4 层。
+  // （原命名 (action, _catalog, _table, _column, _arg) 是错的 —— 见上方实测记录）
+  db.setAuthorizer((action, _arg3, _arg4, _arg5, _arg6) => {
     if (action !== ACTION_READ && action !== ACTION_SELECT && action !== ACTION_FUNCTION) {
       return SQLITE_DENY;
     }
@@ -181,13 +206,27 @@ function buildLimit(numberValue: number) {
   return { seperator: "", value: [{ type: "number", value: numberValue }] };
 }
 
-const MAX_ROWS = 1000;
+/**
+ * 单次查询的行数上限默认值。**这里是唯一的真相源** ——
+ * env.ts 的 MAX_ROWS 默认值 import 它，不再各写一个 1000。
+ * （此前两处各有一个 1000，靠注释维系一致；一旦有人只调 env，
+ *   guard 仍按 1000 收紧，而 C1 的「行数正好等于 LIMIT」截断检测按新值判，
+ *   静默截断就再也报不出来了。）
+ */
+export const DEFAULT_MAX_ROWS = 1000;
 
 /**
  * 第 4 层：语句级防护（fail-closed）。解析失败一律拒绝。
- * 返回 ok 时，sql 为已注入/收紧 LIMIT 的最终可执行语句。
+ *
+ * 纯函数：不连数据库、不读配置、不产生副作用 —— 这是它能被 30 条语料完全覆盖测试的原因。
+ * 需要外部信息才能判断的事都不属于它（口径→lint、代价→EQP、结果→体检）。
+ *
+ * @param maxRows 行数上限，由调用方传（loop 传 env.MAX_ROWS）；缺省用 DEFAULT_MAX_ROWS
+ * @returns ok 时 sql 为**已注入/收紧 LIMIT 后从 AST 重建**的语句 ——
+ *          下游（lint/列名核对/EQP/执行）必须用这个返回值，而不是模型原串，
+ *          以保证「检查过的东西」和「执行的东西」是同一个。
  */
-export function guardSql(rawSql: string): GuardVerdict {
+export function guardSql(rawSql: string, maxRows: number = DEFAULT_MAX_ROWS): GuardVerdict {
   // —— ① 正则预检（廉价前置过滤）——
   // 去掉首部注释与空白后，只接受 SELECT / WITH 开头
   const stripped = rawSql.replace(/^\s*(--[^\n]*\n|\/\*[\s\S]*?\*\/|\s)+/, "");
@@ -241,13 +280,13 @@ export function guardSql(rawSql: string): GuardVerdict {
   const currentValue = Array.isArray(limit?.value) ? (limit.value[0] as { type?: string; value?: unknown } | undefined) : undefined;
 
   if (!limit) {
-    ast.limit = buildLimit(MAX_ROWS);
-  } else if (currentValue?.type === "number" && typeof currentValue.value === "number" && currentValue.value > MAX_ROWS) {
-    ast.limit = buildLimit(MAX_ROWS);
+    ast.limit = buildLimit(maxRows);
+  } else if (currentValue?.type === "number" && typeof currentValue.value === "number" && currentValue.value > maxRows) {
+    ast.limit = buildLimit(maxRows);
   } else if (currentValue?.type !== "number") {
     // LIMIT 非数字常量（如 LIMIT 5 OFFSET 2 的组合、参数化、ALL）——
     // 统一收紧为默认上限，保证不会带着无限/大计数执行
-    ast.limit = buildLimit(MAX_ROWS);
+    ast.limit = buildLimit(maxRows);
   }
 
   // —— ⑦ 重建 SQL 文本 ——
