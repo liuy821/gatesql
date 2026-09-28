@@ -51,19 +51,29 @@ describe("checkMagnitude（8d：金额结果 vs 去业务过滤、留时间范�
     if (r.status === "ok") expect(r.ratio).toBeCloseTo(2010 / 7010, 5);
   });
 
-  it("业务过滤后所剩无几（<1%）→ fail，且控制查询保留了时间范围", () => {
+  it("9/28 修订：占比 <1% 不再 fail（单实体问题天然占比极小，结构性误报已移除）", () => {
     const r = checkMagnitude({
       sql: `${BASE} WHERE o.status = '已完成' AND o.created_at >= '2026-08-01' AND o.created_at <= '2026-08-31'`,
       columns: ["total"],
       rows: [[10]],
       shopDbPath: makeShopDb(),
     });
-    // 控制查询保留 8 月时间条件、剥掉 status → 5010（含已取消的 5000）；10/5010 ≈ 0.2% → fail
+    // 控制查询保留 8 月时间条件、剥掉 status → 5010；10/5010 ≈ 0.2%，旧版 fail，现应 ok
+    expect(r.status).toBe("ok");
+    if (r.status === "ok") expect(r.ratio).toBeLessThan(0.01);
+  });
+
+  it("控制查询保留时间范围的证据：8 月口径下 6000 超过 8 月控制总数 5010 → fail", () => {
+    const r = checkMagnitude({
+      sql: `${BASE} WHERE o.status = '已完成' AND o.created_at >= '2026-08-01' AND o.created_at <= '2026-08-31'`,
+      columns: ["total"],
+      rows: [[6000]],
+      shopDbPath: makeShopDb(),
+    });
+    // 若控制查询错误地剥掉时间（=7010），6000 < 7010 会 ok；
+    // 正确保留时间（=5010）时 6000 > 5010 → fail。以此锁定「保留时间」不被回归
     expect(r.status).toBe("fail");
-    if (r.status === "fail") {
-      expect(r.ratio).toBeLessThan(0.01);
-      expect(r.detail).toContain("5010");
-    }
+    if (r.status === "fail") expect(r.ratio).toBeGreaterThan(1);
   });
 
   it("空集（NULL 结果）→ 不表态，交给空集体检", () => {

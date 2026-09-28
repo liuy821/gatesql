@@ -1,7 +1,7 @@
 /**
  * 量级校验（8d，docs/05 C1(d)）：金额聚合结果与「去掉业务过滤、保留时间
- * 范围」的控制总数对比 —— 结果占比 >100%（逻辑不可能，疑似口径/JOIN 错误）
- * 或 <1%（业务过滤后所剩无几，疑似口径过严）→ fail，由 loop 降级未核验。
+ * 范围」的控制总数对比 —— 结果占比 >100%（超过同范围无过滤的控制总数，
+ * 逻辑不可能，疑似口径/JOIN 错误）→ fail，由 loop 降级未核验。
  *
  * 设计要点：
  *   - 控制查询必须保留时间条件。时间范围是问题的口径而非业务过滤——若连时间
@@ -9,6 +9,10 @@
  *   - 只对「单一 SUM、无 GROUP BY」表态。AVG 与分组结果的占比没有明确语义，
  *     宁可 skip 也不猜。多列/多聚合同样 skip。
  *   - 结果为 NULL / 非数值时不表态——空集形态由 C1 的空集体检负责，不越界。
+ *   - **9/28 修订：移除了原 <1%「过滤后所剩无几」分支**。实测「孙明强一共
+ *     消费了多少」这类单实体问题，答案天然只占总量的几百分之一，该分支必然
+ *     误报 → 单实体类问题永远未核验。启发式 lower bound 的误伤面大于收益，
+ *     删除；>100% 是逻辑不可能，保留。（实测案例：r_801ab85f，占比 0.17% 误报）
  */
 
 import { DatabaseSync } from "node:sqlite";
@@ -22,7 +26,6 @@ export type MagnitudeVerdict =
   | { status: "ok"; ratio: number }
   | { status: "fail"; ratio: number; detail: string };
 
-const MIN_RATIO = 0.01; // <1%：业务过滤后所剩无几
 const MAX_RATIO = 1; // >100%：超过同范围无过滤控制总数，逻辑不可能
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -129,13 +132,6 @@ export function checkMagnitude(input: {
       status: "fail",
       ratio,
       detail: `结果 ${value} 超过同范围无过滤控制总数 ${control}（占比 ${(ratio * 100).toFixed(1)}%），逻辑不可能，疑似口径或 JOIN 错误`,
-    };
-  }
-  if (ratio < MIN_RATIO) {
-    return {
-      status: "fail",
-      ratio,
-      detail: `结果仅占同范围无过滤控制总数 ${control} 的 ${(ratio * 100).toFixed(2)}%，业务过滤后所剩无几，请确认口径是否符合预期`,
     };
   }
   return { status: "ok", ratio };
